@@ -1,0 +1,859 @@
+---
+title: "MI B-Line Project"
+output:
+  html_document: 
+    fig_caption: yes
+    keep_md: yes
+---
+
+=== ULTRASOUND STUDIES
+
+```{r}
+
+# Change plot settings
+par(mar = c(0.1, 0.1, 0.1, 0.1))
+par(oma = c(0, 0, 0, 0))
+
+#load needed libraries--note if not already installed, you need to install these packages + all their dependencies
+
+library(dplyr) #group data
+library(scales)
+library(caret) #confusionMatrix functions
+library(epiR) #CI of diagnostic stats
+library(ggplot2)
+library(statpsych)
+library(survival)
+library(survminer)
+
+dir.create('R_out_final')
+
+
+```
+
+Looking at lung ultrasound studies in isolation
+
+```{r}
+mibpp<-read.csv("MI B-Line Comparisons v3.csv", na.strings = "")
+
+mibpp$K_numB_12_MI0.4_pos <- ifelse(mibpp$K_numB_12_MI0.4>=3,1,0)
+mibpp$K_numB_12_MI1.3_pos <- ifelse(mibpp$K_numB_12_MI1.3>=3,1,0)
+mibpp$K_numB_bottom_MI0.4_pos <- ifelse(mibpp$K_numB_bottom_MI0.4>=3,1,0)
+mibpp$K_numB_bottom_MI1.3_pos <- ifelse(mibpp$K_numB_bottom_MI1.3>=3,1,0)
+
+mibpp$N_numB_12_MI0.4_pos <- ifelse(mibpp$N_numB_12_MI0.4>=3,1,0)
+mibpp$N_numB_12_MI1.3_pos <- ifelse(mibpp$N_numB_12_MI1.3>=3,1,0)
+mibpp$N_numB_bottom_MI0.4_pos <- ifelse(mibpp$N_numB_bottom_MI0.4>=3,1,0)
+mibpp$N_numB_bottom_MI1.3_pos <- ifelse(mibpp$N_numB_bottom_MI1.3>=3,1,0)
+
+mibpp$R_numB_12_MI0.4_pos <- ifelse(mibpp$R_numB_12_MI0.4>=3,1,0)
+mibpp$R_numB_12_MI1.3_pos <- ifelse(mibpp$R_numB_12_MI1.3>=3,1,0)
+mibpp$R_numB_bottom_MI0.4_pos <- ifelse(mibpp$R_numB_bottom_MI0.4>=3,1,0)
+mibpp$R_numB_bottom_MI1.3_pos <- ifelse(mibpp$R_numB_bottom_MI1.3>=3,1,0)
+
+mibpp_30cm<-subset(mibpp, X30cm == "True")
+mibpp<-subset(mibpp, X30cm == "False")
+
+graph_paired <- function(arr1, arr2, l1, l2, ylab, title){
+  
+  arr1 <- arr1[!is.na(arr2)]
+  arr2 <- arr2[!is.na(arr2)]
+  
+  gdata = list()
+  gdata$arr1 = arr1
+  gdata$arr2 = arr2
+  
+  if (title == 'Number of B-lines'){
+    ymax = 10
+  } else {
+    ymax = max(c(max(arr1), max(arr2)))
+  }
+    
+  plot(
+    x=c(0,1), y=(c(mean(arr1), mean(arr2))), 
+    ylim=c(0,ymax), 
+    type='l', lwd=3, col='black', main=NULL,
+    xlab='', xaxt='n', ylab=ylab)
+  
+  print(paste(l1, ': Mean ', round(mean(arr1, na.rm=TRUE),2), " (SD ", round(sd(arr1, na.rm=TRUE),2), "), Median ", round(median(arr1, na.rm=TRUE),2), " (1st QT: ", round(quantile(arr1, 0.25), 2), ", 3rd QT: ", round(quantile(arr1, 0.75)), ")", sep=''))
+  print(paste(l2, ': Mean ', round(mean(arr2, na.rm=TRUE),2), " (SD ", round(sd(arr2, na.rm=TRUE),2), "), Median ", round(median(arr2, na.rm=TRUE),2), " (1st QT: ", round(quantile(arr2, 0.25), 2), ", 3rd QT: ", round(quantile(arr2, 0.75)), ")", sep=''))
+
+  res = t.test(arr1, arr2, paired=TRUE)
+  print(paste("Paired T-Test p=", scientific(res$p.value, digits=3)))
+  
+  wc = wilcox.test(arr1, arr2, paired=TRUE)
+  print(paste("Paired Wilcox p=", scientific(wc$p.value, digits=3)))
+  
+  delta_frac = ifelse(arr1==0, 0, (arr2-arr1)/arr1)
+  
+  print(paste('Change of ', round(100*mean(delta_frac, na.rm=TRUE)), "% (SD ", round(100*sd(delta_frac, na.rm=TRUE)), "%)", sep=''))
+  
+  axis(side=1, at=c(0,1), labels=c(l1, l2))
+  
+  for (i in 1:length(arr1)){
+    if (arr1[i] < arr2[i]){
+        color = '#FFCCCC'
+    } else if (arr1[i]>arr2[i]){
+        color = '#CCCCFF'
+    } else {
+        color = 'gray'
+    }
+    lines(x=c(0,1), y=c(arr1[i], arr2[i]), col=color)
+  }
+  
+  lines(x=c(0,1), y=(c(mean(arr1), mean(arr2))), type='l', lwd=2, col='black')
+  
+  arrows(x0=0, x1=0, y0=mean(arr1), y1=mean(arr1)+sd(arr1)/sqrt(length(arr1)), col="black", lwd=2, angle=90, length = 0.05)
+  arrows(x0=0, x1=0, y0=mean(arr1), y1=mean(arr1)-sd(arr1)/sqrt(length(arr1)), col="black", lwd=2, angle=90, length = 0.05)
+  arrows(x0=1, x1=1, y0=mean(arr2), y1=mean(arr2)+sd(arr2)/sqrt(length(arr2)), col="black", lwd=2, angle=90, length = 0.05)
+  arrows(x0=1, x1=1, y0=mean(arr2), y1=mean(arr2)-sd(arr2)/sqrt(length(arr2)), col="black", lwd=2, angle=90, length = 0.05)
+  
+  star_str = 'n.s.'
+  if (res$p.value<0.001){
+    star_str = "***"
+  } else if (res$p.value<0.01){
+    star_str = "**"
+  } else if (res$p.value<0.05){
+    star_str = "*"
+  }
+  text(x=0.5, y=mean(c(mean(arr1), mean(arr2))), adj=c(0.5, 0), star_str)
+  
+  
+}
+
+```
+
+Number of lung US studies
+
+```{r}
+print(paste('Number of lung US studies:', count(mibpp)))
+```
+
+B-line length decreases from 1.3 to 0.4
+
+```{r}
+png('R_out_final/B-line length.png', width=2, height=4, units="in", res=300, type='cairo')
+graph_paired(mibpp$LongestB_MI1.3, mibpp$LongestB_MI0.4, 'MI 1.3', 'MI 0.4', 'Longest B-line (cm)', 'B-Line Length')
+invisible(dev.off())
+```
+
+There is a decreased number of B-lines when measuring at 0.4 vs 1.3 
+
+```{r}
+png('R_out_final/B-line count 1_3 to 0_4.png', width=2, height=4, units="in", res=300, type='cairo')
+graph_paired(mibpp$K_numB_bottom_MI1.3, mibpp$K_numB_bottom_MI0.4, 'MI 1.3', 'MI 0.4', 'B-line Count (at 16cm)', 'Number of B-lines')
+invisible(dev.off())
+```
+
+The prevalence of an LUS+ study (3+ B lines) at MI=1.3 vs MI=0.4 decreases
+
+```{r}
+print(paste("LUS+ at MI 1.3@16cm:", sum(mibpp$K_numB_bottom_MI1.3_pos), "/", count(mibpp), "(", round(100*sum(mibpp$K_numB_bottom_MI1.3_pos)/count(mibpp),0), "%)"))
+print(paste("LUS+ at MI 0.4@16cm:", sum(mibpp$K_numB_bottom_MI0.4_pos), "/", count(mibpp), "(", round(100*sum(mibpp$K_numB_bottom_MI0.4_pos)/count(mibpp),0), "%)"))
+confusionMatrix(as.factor(mibpp$K_numB_bottom_MI1.3_pos),as.factor(mibpp$K_numB_bottom_MI0.4_pos), positive="1")[['overall']]['McnemarPValue']
+```
+
+Sensitivity drops when using MI 0.4@16 compared to 1.3@16
+
+```{r}
+OUTCOME = ">3 B-lines at MI 1.3 @16"
+TEST    = ">3 B-lines at MI 0.4 @16"
+tab<-table(mibpp$K_numB_bottom_MI0.4_pos, mibpp$K_numB_bottom_MI1.3_pos)
+data <- as.table(matrix(c(tab[2,2],tab[2,1],tab[1,2],tab[1,1]), nrow = 2, byrow = TRUE))
+rval <- epi.tests(data, conf.level = 0.95)
+colnames(rval$tab) = c(paste(OUTCOME, '(+)'), paste(OUTCOME,'(-)'),'Total')
+rownames(rval$tab) = c(paste(TEST, '(+)'), paste(TEST,'(-)'), 'Total')
+print(rval)
+```
+
+Sensitivity remains low, but specificity suffers at MI 0.4 @12cm 
+
+```{r}
+OUTCOME = ">3 B-lines at MI 1.3 @16"
+TEST    = ">3 B-lines at MI 0.4 @12"
+tab<-table(mibpp$K_numB_12_MI0.4_pos, mibpp$K_numB_bottom_MI1.3_pos)
+data <- as.table(matrix(c(tab[2,2],tab[2,1],tab[1,2],tab[1,1]), nrow = 2, byrow = TRUE))
+rval <- epi.tests(data, conf.level = 0.95)
+colnames(rval$tab) = c(paste(OUTCOME, '(+)'), paste(OUTCOME,'(-)'),'Total')
+rownames(rval$tab) = c(paste(TEST, '(+)'), paste(TEST,'(-)'), 'Total')
+print(rval)
+```
+
+Now look at the 30cm data, number of 30cm lung US studies
+
+```{r}
+print(paste('Number of 30cm lung US studies:', count(mibpp_30cm)))
+```
+
+B-line length decreases from 1.3 to 0.4 at 30cm
+
+```{r}
+png('R_out_final/30cm B-line length.png', width=2, height=4, units="in", res=300, type='cairo')
+graph_paired(mibpp_30cm$LongestB_MI1.3, mibpp_30cm$LongestB_MI0.4, 'MI 1.3', 'MI 0.4', 'Longest B-line (cm)', 'B-Line Length')
+invisible(dev.off())
+```
+
+There is a decreased number of B-lines when measuring at 0.4 vs 1.3 at 30cm
+
+```{r}
+png('R_out_final/30cm B-line count 1_3 to 0_4.png', width=2, height=4, units="in", res=300, type='cairo')
+graph_paired(mibpp_30cm$K_numB_bottom_MI1.3, mibpp_30cm$K_numB_bottom_MI0.4, 'MI 1.3', 'MI 0.4', 'B-line Count (at 16cm)', 'Number of B-lines')
+invisible(dev.off())
+```
+
+The prevalence of an LUS+ study (3+ B lines) at MI=1.3 vs MI=0.4 decreases at 30cm
+
+```{r}
+print(paste("LUS+ at MI 1.3@30cm:", sum(mibpp_30cm$K_numB_bottom_MI1.3_pos), "/", count(mibpp_30cm), "(", round(100*sum(mibpp_30cm$K_numB_bottom_MI1.3_pos)/count(mibpp_30cm),0), "%)"))
+print(paste("LUS+ at MI 0.4@30cm:", sum(mibpp_30cm$K_numB_bottom_MI0.4_pos), "/", count(mibpp_30cm), "(", round(100*sum(mibpp_30cm$K_numB_bottom_MI0.4_pos)/count(mibpp_30cm),0), "%)"))
+confusionMatrix(as.factor(mibpp$K_numB_bottom_MI1.3_pos),as.factor(mibpp$K_numB_bottom_MI0.4_pos), positive="1")[['overall']]['McnemarPValue']
+```
+
+Perform similar sensitivity analyses for Nayak and Resnikoff
+comparing their MI 1.3 and MI 0.4 metrics
+
+Nayak noted a decreased number of B-lines when measuring at 0.4 vs 1.3 
+
+```{r}
+png('R_out_final/Nayak B-line count 1_3 to 0_4.png', width=2, height=4, units="in", res=300, type='cairo')
+graph_paired(mibpp$N_numB_bottom_MI1.3, mibpp$N_numB_bottom_MI0.4, 'MI 1.3', 'MI 0.4', 'Nayak B-line Count (at 16cm)', 'Number of B-lines')
+invisible(dev.off())
+```
+
+Resnikoff noted a decreased number of B-lines when measuring at 0.4 vs 1.3 
+
+```{r}
+png('R_out_final/Resnikoff B-line count 1_3 to 0_4.png', width=2, height=4, units="in", res=300, type='cairo')
+graph_paired(mibpp$R_numB_bottom_MI1.3, mibpp$R_numB_bottom_MI0.4, 'MI 1.3', 'MI 0.4', 'Resnikoff B-line Count (at 16cm)', 'Number of B-lines')
+invisible(dev.off())
+```
+
+Sensitivity drops when using MI 0.4@16 compared to 1.3@16 for Nayak
+
+```{r}
+OUTCOME= ">3 B-lines at MI 1.3 @16 for Nayak"
+TEST =   ">3 B-lines at MI 0.4 @16 for Nayak"
+tab<-table(mibpp$N_numB_bottom_MI0.4_pos, mibpp$N_numB_bottom_MI1.3_pos)
+data <- as.table(matrix(c(tab[2,2],tab[2,1],tab[1,2],tab[1,1]), nrow = 2, byrow = TRUE))
+rval <- epi.tests(data, conf.level = 0.95)
+colnames(rval$tab) = c(paste(OUTCOME, '(+)'), paste(OUTCOME,'(-)'),'Total')
+rownames(rval$tab) = c(paste(TEST, '(+)'), paste(TEST,'(-)'), 'Total')
+print(rval)
+```
+
+Sensitivity drops when using MI 0.4@16 compared to 1.3@16 for Resnikoff
+
+```{r}
+OUTCOME = ">3 B-lines at MI 1.3 @16 for Resnikoff"
+TEST    = ">3 B-lines at MI 0.4 @16 for Resnikoff"
+tab<-table(mibpp$R_numB_bottom_MI0.4_pos, mibpp$R_numB_bottom_MI1.3_pos)
+data <- as.table(matrix(c(tab[2,2],tab[2,1],tab[1,2],tab[1,1]), nrow = 2, byrow = TRUE))
+rval <- epi.tests(data, conf.level = 0.95)
+colnames(rval$tab) = c(paste(OUTCOME, '(+)'), paste(OUTCOME,'(-)'),'Total')
+rownames(rval$tab) = c(paste(TEST, '(+)'), paste(TEST,'(-)'), 'Total')
+print(rval)
+```
+
+
+Correlation between different physician's observations
+
+```{r}
+
+K_delta = mibpp$K_numB_bottom_MI1.3 - mibpp$K_numB_bottom_MI0.4
+N_delta = mibpp$N_numB_bottom_MI1.3 - mibpp$N_numB_bottom_MI0.4
+R_delta = mibpp$R_numB_bottom_MI1.3 - mibpp$R_numB_bottom_MI0.4
+
+K_delta_frac = ifelse(mibpp$K_numB_bottom_MI1.3 == 0,
+                      0,
+                      (mibpp$K_numB_bottom_MI1.3 - mibpp$K_numB_bottom_MI0.4) / mibpp$K_numB_bottom_MI1.3)
+N_delta_frac = ifelse(mibpp$N_numB_bottom_MI1.3 == 0,
+                      0,
+                      (mibpp$N_numB_bottom_MI1.3 - mibpp$N_numB_bottom_MI0.4) / mibpp$N_numB_bottom_MI1.3)
+R_delta_frac = ifelse(mibpp$R_numB_bottom_MI1.3 == 0,
+                      0,
+                      (mibpp$R_numB_bottom_MI1.3 - mibpp$R_numB_bottom_MI0.4) / mibpp$R_numB_bottom_MI1.3)
+
+print('-----------------------')
+print('Kimura+Nayak')
+print('-----------------------')
+
+print('MI 1.3 @16cm')
+
+ct <- cor.test(mibpp$K_numB_bottom_MI1.3, mibpp$N_numB_bottom_MI1.3, method="pearson", use="complete.obs")
+print(paste("Linear (Pearson) correlation: p-value", scientific(ct$p.value,3)))
+print(paste("Linear (Pearson) correlation: cor", scientific(ct$conf.int[1],3), '-', scientific(ct$conf.int[2],3)))
+
+ct <- cor.test(mibpp$K_numB_bottom_MI1.3, mibpp$N_numB_bottom_MI1.3, method="spearman", use="complete.obs", exact = FALSE)
+print(paste("Linear (Spearman) correlation: p-value", scientific(ct$p.value,3)))
+print(paste("Linear (Spearman) correlation: rho", scientific(ct$estimate,3)))
+ct <- ci.spear(0.05, mibpp$K_numB_bottom_MI1.3, mibpp$N_numB_bottom_MI1.3)
+print(paste("Linear (Spearman) correlation: rho", scientific(ct[3],3), '-', scientific(ct[4],4)))
+
+print('')
+
+print('MI 0.4 @16cm')
+
+ct <- cor.test(mibpp$K_numB_bottom_MI0.4, mibpp$N_numB_bottom_MI0.4, method="pearson", use="complete.obs", exact = FALSE)
+print(paste("Linear (Pearson) correlation: p-value", scientific(ct$p.value,3)))
+print(paste("Linear (Pearson) correlation: cor", scientific(ct$conf.int[1],3), '-', scientific(ct$conf.int[2],3)))
+
+ct <- cor.test(mibpp$K_numB_bottom_MI0.4, mibpp$N_numB_bottom_MI0.4, method="spearman", use="complete.obs")
+print(paste("Linear (Spearman) correlation: p-value", scientific(ct$p.value,3)))
+print(paste("Linear (Spearman) correlation: rho", scientific(ct$estimate,3)))
+ct <- ci.spear(0.05, mibpp$K_numB_bottom_MI0.4, mibpp$N_numB_bottom_MI0.4)
+print(paste("Linear (Spearman) correlation: rho", scientific(ct[3],3), '-', scientific(ct[4],4)))
+
+print('')
+
+print('B-line drop')
+
+ct <- cor.test(K_delta, N_delta, method="pearson", use="complete.obs")
+print(paste("Linear (Pearson) correlation: p-value", scientific(ct$p.value,3)))
+print(paste("Linear (Pearson) correlation: cor", scientific(ct$conf.int[1],3), '-', scientific(ct$conf.int[2],3)))
+
+ct <- cor.test(K_delta, N_delta, method="spearman", use="complete.obs", exact = FALSE)
+print(paste("Linear (Spearman) correlation: p-value", scientific(ct$p.value,3)))
+print(paste("Linear (Spearman) correlation: rho", scientific(ct$estimate,3)))
+ct <- ci.spear(0.05, K_delta, N_delta)
+print(paste("Linear (Spearman) correlation: rho", scientific(ct[3],3), '-', scientific(ct[4],4)))
+
+
+print('')
+
+print('B-line drop percentage')
+
+ct <- cor.test(K_delta_frac, N_delta_frac, method="pearson", use="complete.obs")
+print(paste("Linear (Pearson) correlation: p-value", scientific(ct$p.value,3)))
+print(paste("Linear (Pearson) correlation: cor", scientific(ct$conf.int[1],3), '-', scientific(ct$conf.int[2],3)))
+
+ct <- cor.test(K_delta_frac, N_delta_frac, method="spearman", use="complete.obs", exact = FALSE)
+print(paste("Linear (Spearman) correlation: p-value", scientific(ct$p.value,3)))
+print(paste("Linear (Spearman) correlation: rho", scientific(ct$estimate,3)))
+ct <- ci.spear(0.05, K_delta_frac, N_delta_frac)
+print(paste("Linear (Spearman) correlation: rho", scientific(ct[3],3), '-', scientific(ct[4],4)))
+
+
+
+print('')
+
+print('-----------------------')
+print('Kimura+Resnikoff')
+print('-----------------------')
+print('MI 1.3 @16cm')
+
+ct <- cor.test(mibpp$K_numB_bottom_MI1.3, mibpp$R_numB_bottom_MI1.3, method="pearson", use="complete.obs")
+print(paste("Linear (Pearson) correlation: p-value", scientific(ct$p.value,3)))
+print(paste("Linear (Pearson) correlation: cor", scientific(ct$conf.int[1],3), '-', scientific(ct$conf.int[2],3)))
+
+ct <- cor.test(mibpp$K_numB_bottom_MI1.3, mibpp$R_numB_bottom_MI1.3, method="spearman", use="complete.obs", exact = FALSE)
+print(paste("Linear (Spearman) correlation: p-value", scientific(ct$p.value,3)))
+print(paste("Linear (Spearman) correlation: rho", scientific(ct$estimate,3)))
+ct <- ci.spear(0.05, mibpp$K_numB_bottom_MI1.3, mibpp$R_numB_bottom_MI1.3)
+print(paste("Linear (Spearman) correlation: rho", scientific(ct[3],3), '-', scientific(ct[4],4)))
+
+print('')
+
+print('MI 0.4 @16cm')
+
+ct <- cor.test(mibpp$K_numB_bottom_MI0.4, mibpp$R_numB_bottom_MI0.4, method="pearson", use="complete.obs")
+print(paste("Linear (Pearson) correlation: p-value", scientific(ct$p.value,3)))
+print(paste("Linear (Pearson) correlation: cor", scientific(ct$conf.int[1],3), '-', scientific(ct$conf.int[2],3)))
+
+ct <- cor.test(mibpp$K_numB_bottom_MI0.4, mibpp$R_numB_bottom_MI0.4, method="spearman", use="complete.obs", exact = FALSE)
+print(paste("Linear (Spearman) correlation: p-value", scientific(ct$p.value,3)))
+print(paste("Linear (Spearman) correlation: rho", scientific(ct$estimate,3)))
+ct <- ci.spear(0.05, mibpp$K_numB_bottom_MI0.4, mibpp$R_numB_bottom_MI0.4)
+print(paste("Linear (Spearman) correlation: rho", scientific(ct[3],3), '-', scientific(ct[4],4)))
+
+
+print('')
+
+print('B-line drop')
+
+ct <- cor.test(K_delta, R_delta, method="pearson", use="complete.obs")
+print(paste("Linear (Pearson) correlation: p-value", scientific(ct$p.value,3)))
+print(paste("Linear (Pearson) correlation: cor", scientific(ct$conf.int[1],3), '-', scientific(ct$conf.int[2],3)))
+
+ct <- cor.test(K_delta, R_delta, method="spearman", use="complete.obs", exact = FALSE)
+print(paste("Linear (Spearman) correlation: p-value", scientific(ct$p.value,3)))
+print(paste("Linear (Spearman) correlation: rho", scientific(ct$estimate,3)))
+ct <- ci.spear(0.05, K_delta, R_delta)
+print(paste("Linear (Spearman) correlation: rho", scientific(ct[3],3), '-', scientific(ct[4],4)))
+
+print('')
+
+print('B-line drop percentage')
+
+ct <- cor.test(K_delta_frac, R_delta_frac, method="pearson", use="complete.obs")
+print(paste("Linear (Pearson) correlation: p-value", scientific(ct$p.value,3)))
+print(paste("Linear (Pearson) correlation: cor", scientific(ct$conf.int[1],3), '-', scientific(ct$conf.int[2],3)))
+
+ct <- cor.test(K_delta_frac, R_delta_frac, method="spearman", use="complete.obs", exact = FALSE)
+print(paste("Linear (Spearman) correlation: p-value", scientific(ct$p.value,3)))
+print(paste("Linear (Spearman) correlation: rho", scientific(ct$estimate,3)))
+ct <- ci.spear(0.05, K_delta_frac, R_delta_frac)
+print(paste("Linear (Spearman) correlation: rho", scientific(ct[3],3), '-', scientific(ct[4],4)))
+
+print('')
+
+```
+
+Chest wall thickness
+
+```{r}
+print(paste("Chest wall thickness (cm):", round(mean(mibpp$PleuralApicalLength_MI1.3),1), "( SD", round(sd(mibpp$PleuralApicalLength_MI1.3),1), ")"))
+```
+
+Chest wall thickness not associated with B-line count, length, or decrease in 
+count or length
+
+```{r}
+print('Pearson correlation coefficient between pleural-apical length and')
+print(paste(
+  '* B-line count at MI 1.3:',
+  round(cor(mibpp$PleuralApicalLength_MI1.3,mibpp$K_numB_bottom_MI1.3, method="pearson"),2)
+  ))
+print(paste(
+  '* B-line length at MI 1.3:',
+  round(cor(mibpp$PleuralApicalLength_MI1.3,mibpp$LongestB_MI1.3, method="pearson"),2)
+  ))
+print(paste(
+  '* B-line count change from MI 1.3 to MI 0.4:',
+  round(cor(mibpp$PleuralApicalLength_MI1.3,mibpp$K_numB_bottom_MI1.3 - mibpp$K_numB_bottom_MI0.4, method="pearson"),2)
+  ))
+print(paste(
+  '* B-line length change from MI 1.3 to MI 0.4:',
+  round(cor(mibpp$PleuralApicalLength_MI1.3,mibpp$LongestB_MI1.3 - mibpp$LongestB_MI0.4, method="pearson"),2)
+  ))
+
+print('')
+
+print('Spearman correlation coefficient between pleural-apical length and')
+print(paste(
+  '* B-line count at MI 1.3:',
+  round(cor(mibpp$PleuralApicalLength_MI1.3,mibpp$K_numB_bottom_MI1.3, method="spearman"),2)
+  ))
+print(paste(
+  '* B-line length at MI 1.3:',
+  round(cor(mibpp$PleuralApicalLength_MI1.3,mibpp$LongestB_MI1.3, method="spearman"),2)
+  ))
+print(paste(
+  '* B-line count change from MI 1.3 to MI 0.4:',
+  round(cor(mibpp$PleuralApicalLength_MI1.3,mibpp$K_numB_bottom_MI1.3 - mibpp$K_numB_bottom_MI0.4, method="spearman"),2)
+  ))
+print(paste(
+  '* B-line length change from MI 1.3 to MI 0.4:',
+  round(cor(mibpp$PleuralApicalLength_MI1.3,mibpp$LongestB_MI1.3 - mibpp$LongestB_MI0.4, method="spearman"),2)
+  ))
+print('')
+
+png('R_out_final/Chest Wall vs Num B-Line.png', width=4, height=4, units="in", res=300, type='cairo')
+plot(mibpp$PleuralApicalLength_MI1.3, mibpp$K_numB_bottom_MI1.3)
+invisible(dev.off())
+
+png('R_out_final/Chest Wall vs B-Line length.png', width=4, height=4, units="in", res=300, type='cairo')
+plot(mibpp$PleuralApicalLength_MI1.3, mibpp$LongestB_MI1.3)
+invisible(dev.off())
+
+png('R_out_final/Chest Wall vs Decrease in Num B-line.png', width=4, height=4, units="in", res=300, type='cairo')
+plot(mibpp$PleuralApicalLength_MI1.3, mibpp$K_numB_bottom_MI1.3 - mibpp$K_numB_bottom_MI0.4)
+invisible(dev.off())
+
+png('R_out_final/Chest Wall vs Decrease in B-Line length.png', width=4, height=4, units="in", res=300, type='cairo')
+plot(mibpp$PleuralApicalLength_MI1.3, mibpp$LongestB_MI1.3 - mibpp$LongestB_MI0.4)
+invisible(dev.off())
+```
+
+==== CLINICAL
+
+```{r}
+# Loading Clinical data
+mibpp_c<-read.csv("MI B-Line Comparisons v3 - Merge For Each Study.csv", na.strings = "")
+mibpp_c$Clinical_Dead <- as.logical(mibpp_c$Clinical_Dead)
+mibpp_c$Clinical_RespFailure <- as.logical(mibpp_c$Clinical_RespFailure)
+mibpp_c$Clinical_DM <- as.logical(mibpp_c$Clinical_DM)
+
+mibpp_c$Clinical_LVEF <- mibpp_c$Clinical_LVEF * 100
+
+both <- function(arr1, arr2){
+  out <- rep(arr1)
+  arr1[is.na(arr1)] = 0
+  arr2[is.na(arr2)] = 0
+  
+  for (i in 1:length(arr1)){
+    out[i] <- (arr1[i] & arr2[i])
+  }
+  
+  return(out)
+}
+
+# Processing
+mibpp_c$kbot_13_pos_L<-ifelse(mibpp_c$K_numB_bottom_L_norm_MI1.3>=3,1,0)
+mibpp_c$kbot_04_pos_L<-ifelse(mibpp_c$K_numB_bottom_L_norm_MI0.4>=3,1,0)
+mibpp_c$k12_13_pos_L<-ifelse(mibpp_c$K_numB_12_L_norm_MI1.3>=3,1,0)
+mibpp_c$k12_04_pos_L<-ifelse(mibpp_c$K_numB_12_L_norm_MI0.4>=3,1,0)
+
+mibpp_c$kbot_13_pos_R<-ifelse(mibpp_c$K_numB_bottom_R_norm_MI1.3>=3,1,0)
+mibpp_c$kbot_04_pos_R<-ifelse(mibpp_c$K_numB_bottom_R_norm_MI0.4>=3,1,0)
+mibpp_c$k12_13_pos_R<-ifelse(mibpp_c$K_numB_12_R_norm_MI1.3>=3,1,0)
+mibpp_c$k12_04_pos_R<-ifelse(mibpp_c$K_numB_12_R_norm_MI0.4>=3,1,0)
+
+# Boolean if both lung fields have 3+ B-lines
+mibpp_c$kbot_13_pos_both<-both(mibpp_c$kbot_13_pos_L, mibpp_c$kbot_13_pos_R)
+mibpp_c$kbot_04_pos_both<-both(mibpp_c$kbot_04_pos_L, mibpp_c$kbot_04_pos_R)
+mibpp_c$k12_13_pos_both<-both(mibpp_c$k12_13_pos_L, mibpp_c$k12_13_pos_R)
+mibpp_c$k12_04_pos_both<-both(mibpp_c$k12_04_pos_L, mibpp_c$k12_04_pos_R)
+
+
+```
+
+See how the patient's LUS+ status is redefined when using lower MI US
+
+```{r}
+OUTCOME = "Patients with bilateral >3 B-lines at MI 1.3 @16"
+TEST    = "Patients with bilateral >3 B-lines at MI 0.4 @16"
+tab<-table(mibpp_c$kbot_04_pos_both, mibpp_c$kbot_13_pos_both)
+data <- as.table(matrix(c(tab[2,2],tab[2,1],tab[1,2],tab[1,1]), nrow = 2, byrow = TRUE))
+rval <- epi.tests(data, conf.level = 0.95)
+colnames(rval$tab) = c(paste(OUTCOME, '(+)'), paste(OUTCOME,'(-)'),'Total')
+rownames(rval$tab) = c(paste(TEST, '(+)'), paste(TEST,'(-)'), 'Total')
+print(rval)
+```
+
+See how many false negatives for death we get with MI 1.3 @16
+
+```{r}
+OUTCOME = "Death"
+TEST    = "Bilateral >3 B-lines at MI 1,3 @16"
+tab<-table(mibpp_c$kbot_13_pos_both, mibpp_c$Clinical_Dead)
+data <- as.table(matrix(c(tab[2,2],tab[2,1],tab[1,2],tab[1,1]), nrow = 2, byrow = TRUE))
+rval <- epi.tests(data, conf.level = 0.95)
+colnames(rval$tab) = c(paste(OUTCOME, '(+)'), paste(OUTCOME,'(-)'),'Total')
+rownames(rval$tab) = c(paste(TEST, '(+)'), paste(TEST,'(-)'), 'Total')
+print(rval)
+```
+
+See how many false negatives for death we get with MI 0.4 @16
+
+```{r}
+OUTCOME = "Death"
+TEST    = "Bilateral >3 B-lines at MI 0.4 @16"
+tab<-table(mibpp_c$kbot_04_pos_both, mibpp_c$Clinical_Dead)
+data <- as.table(matrix(c(tab[2,2],tab[2,1],tab[1,2],tab[1,1]), nrow = 2, byrow = TRUE))
+rval <- epi.tests(data, conf.level = 0.95)
+colnames(rval$tab) = c(paste(OUTCOME, '(+)'), paste(OUTCOME,'(-)'),'Total')
+rownames(rval$tab) = c(paste(TEST, '(+)'), paste(TEST,'(-)'), 'Total')
+print(rval)
+```
+
+See how many false negatives for resp failure we get with MI 1.3 @16
+
+```{r}
+OUTCOME = "Respiratory Failure"
+TEST    = "Bilateral >3 B-lines at MI 1,3 @16"
+tab<-table(mibpp_c$kbot_13_pos_both, mibpp_c$Clinical_RespFailure)
+data <- as.table(matrix(c(tab[2,2],tab[2,1],tab[1,2],tab[1,1]), nrow = 2, byrow = TRUE))
+rval <- epi.tests(data, conf.level = 0.95)
+colnames(rval$tab) = c(paste(OUTCOME, '(+)'), paste(OUTCOME,'(-)'),'Total')
+rownames(rval$tab) = c(paste(TEST, '(+)'), paste(TEST,'(-)'), 'Total')
+print(rval)
+```
+
+See how many false negatives for resp failure we get with MI 0.4 @16
+
+```{r}
+OUTCOME = "Respiratory Failure"
+TEST    = "Bilateral >3 B-lines at MI 0.4 @16"
+tab<-table(mibpp_c$kbot_04_pos_both, mibpp_c$Clinical_RespFailure)
+data <- as.table(matrix(c(tab[2,2],tab[2,1],tab[1,2],tab[1,1]), nrow = 2, byrow = TRUE))
+rval <- epi.tests(data, conf.level = 0.95)
+colnames(rval$tab) = c(paste(OUTCOME, '(+)'), paste(OUTCOME,'(-)'),'Total')
+rownames(rval$tab) = c(paste(TEST, '(+)'), paste(TEST,'(-)'), 'Total')
+print(rval)
+```
+
+Survival Curves
+
+```{r}
+
+kmfit = survfit(Surv(mibpp_c$Clinical_StudyDays_AssumeUnknownLost, mibpp_c$Clinical_Dead) ~ 1)
+p <- ggsurvplot(kmfit, data=mibpp_c, risk.table=TRUE, xlab="Days", tables.theme=theme_cleantable(text = element_text(size = 20))) + ggtitle('All Subjects')
+  options(repr.plot.width = 3, repr.plot.height =3)
+  
+  print(p)
+
+tests = list(
+  c('kbot_13_pos_both', 'MI 1.3 @ 16cm'), 
+  c('kbot_04_pos_both', 'MI 0.4 @ 16cm'),
+  c('k12_04_pos_both',  'MI 0.4 @ 12cm')
+)
+
+for (test in tests){
+  kmfit = survfit(Surv(mibpp_c$Clinical_StudyDays_AssumeUnknownLost, mibpp_c$Clinical_Dead) ~ mibpp_c[, test[1]])
+  
+  p <- ggsurvplot(kmfit, data=mibpp_c, risk.table=TRUE, xlab="Days", 
+                  legend=c(0.55,0.25), legend.title='', legend.labs=c("<3 B-lines in either lung","3+ B-lines in both lungs"), 
+                  tables.theme=theme_cleantable(text = element_text(size = 20)), tables.y.text = FALSE, tables.y.text.col = TRUE, 
+                  font.legend = c(12,'plain','black'), ylab="Survival", tables.height=0.25,
+                  risk.table.fontsize=4, conf.int = TRUE)
+  
+  p$plot <- p$plot + theme(legend.background = element_rect(fill='transparent'), 
+            panel.background = element_rect(fill='transparent')) 
+  p$table <- p$table + theme(plot.title = element_text(size=12))
+  
+  options(repr.plot.width = 3, repr.plot.height =3)
+  
+  print('')
+  print('')
+  print('')
+  print(test)
+  print(kmfit)
+  fitcph = coxph(Surv(mibpp_c$Clinical_StudyDays_AssumeUnknownLost, mibpp_c$Clinical_Dead) ~ mibpp_c[, test[1]])
+  print(fitcph)
+  
+  png(paste('R_out_final/Survival_', test[1], '.png', sep=''), width=3, height=3, units="in", res=300, type='cairo')
+  print(p)
+  dev.off()
+  
+}
+```
+
+Generating clinical variables for tables
+
+```{r}
+
+mibpp_c$Clinical_Gender_Male <- ifelse(mibpp_c$Clinical_Gender=="M",1,0)
+mibpp_c$PleuralApicalLength <- (mibpp_c$PleuralApicalLength_L_norm_MI1.3 + mibpp_c$PleuralApicalLength_R_norm_MI1.3)/2
+
+clinical = list(
+  c('Clinical_Age', 'Age (yr)', 'N'), 
+  c('Clinical_Gender_Male',  'Gender (% male)', 'B'),
+  c('Clinical_DM',  'Diabetes', 'B'),
+  c('Clinical_BMI', 'BMI (kg/m2)', 'N'),
+  c('Clinical_LVEF', 'LVEF (%)', 'N'),
+  c('PleuralApicalLength', 'Chest wall thickness (cm)', 'N'),
+  c('kbot_13_pos_both', 'LUS+ bilateral (MI=1.3, 16cm)', 'B'), 
+  c('kbot_04_pos_both', 'LUS+ bilateral (MI=0.4, 16cm)', 'B'),
+  c('k12_04_pos_both',  'LUS+ bilateral (MI=0.4, 12cm)', 'B')
+)
+
+print('Ready')
+
+```
+
+Get HR of LUS findings
+
+```{r}
+
+d = mibpp_c$Clinical_Dead
+fitcph = coxph(Surv(mibpp_c$Clinical_StudyDays_AssumeUnknownLost, d) ~ mibpp_c$kbot_13_pos_both)
+print(paste('LUS+ bilateral MI 1.3 @ 16 cm:', round(exp(fitcph$coefficients[1]),2), '(', round(exp(confint(fitcph))[1],2), '-', round(exp(confint(fitcph))[2],2), ')'))
+
+fitcph = coxph(Surv(mibpp_c$Clinical_StudyDays_AssumeUnknownLost, d) ~ mibpp_c$kbot_04_pos_both)
+print(paste('LUS+ bilateral MI 0.4 @ 16 cm:', round(exp(fitcph$coefficients[1]),2), '(', round(exp(confint(fitcph))[1],2), '-', round(exp(confint(fitcph))[2],2), ')'))
+
+fitcph = coxph(Surv(mibpp_c$Clinical_StudyDays_AssumeUnknownLost, d) ~ mibpp_c$k12_04_pos_both)
+print(paste('LUS+ bilateral MI 0.4 @ 12 cm:', round(exp(fitcph$coefficients[1]),2), '(', round(exp(confint(fitcph))[1],2), '-', round(exp(confint(fitcph))[2],2), ')'))
+```
+
+Generate Table 1 - univariate relationship to death outcome
+
+```{r}
+
+table_out = data.frame()
+
+d = mibpp_c$Clinical_Dead
+N = length(d)
+
+# Write header row
+table_out <- rbind(table_out, c(
+  '',                                                 # Title
+  paste('Total (n=', N, ')', sep=''),   # Total
+  paste('Alive (n=', sum(!d), ', ', round(sum(!d)*100/N,0),'%)', sep=''),          # Alive stat
+  paste('Dead (n=', sum(d), ', ', round(sum(d)*100/N,0),'%)', sep=''),            # Dead stat
+  'HR (95% CI)',                                      # HR
+  'P value'                                          # p-value
+  ))
+
+# Write data for each variable
+
+for (cvar in clinical){
+
+  fitcph = coxph(Surv(mibpp_c$Clinical_StudyDays_AssumeUnknownLost, d) ~ mibpp_c[, cvar[1]])
+  
+  hr = paste(round(exp(confint(fitcph))[1],2),round(exp(confint(fitcph))[2],2),sep=' - ')
+  p = round(summary(fitcph)$waldtest['pvalue'], 3)
+  
+  if (cvar[3] == 'N'){
+    
+    t_avg = round(mean(mibpp_c[, cvar[1]], na.rm=TRUE), 1)
+    t_std = round(sd(mibpp_c[, cvar[1]], na.rm=TRUE), 1)
+    a_avg = round(mean(mibpp_c[!d, cvar[1]], na.rm=TRUE), 1)
+    a_std = round(sd(mibpp_c[!d, cvar[1]], na.rm=TRUE), 1)
+    d_avg = round(mean(mibpp_c[d, cvar[1]], na.rm=TRUE), 1)
+    d_std = round(sd(mibpp_c[d, cvar[1]], na.rm=TRUE), 1)
+    
+    table_out <- rbind(table_out, c(
+      cvar[2],                                               # Title
+      paste(t_avg,'±',t_std, sep=''),   # Total
+      paste(a_avg,'±',a_std, sep=''),           # Alive stat
+      paste(d_avg,'±',d_std, sep=''),             # Dead stat
+      hr,                                  # HR
+      p                                  # p-value
+      ))
+        
+  } else if (cvar[3] == 'B'){
+    
+    t = paste(round(mean(mibpp_c[, cvar[1]])*100, 0), '%', sep='')
+    ta = paste(round(mean(mibpp_c[!d, cvar[1]])*100, 0), '%', sep='')
+    td = paste(round(mean(mibpp_c[d, cvar[1]])*100, 0), '%', sep='')
+    
+    table_out <- rbind(table_out, c(
+      cvar[2],                                               # Title
+      t,   # Total
+      ta,           # Alive stat
+      td,             # Dead stat
+      hr,                                  # HR
+      p                                  # p-value
+      ))
+    
+  } 
+  
+}
+
+print(table_out)
+
+```
+
+
+Generate Table 1 - univariate relationship to respiratory failure outcome
+
+```{r}
+
+table_out = data.frame()
+
+d = mibpp_c$Clinical_RespFailure
+N = length(d)
+
+# Write header row
+table_out <- rbind(table_out, c(
+  '',                                                 # Title
+  paste('Total (n=', N, ')', sep=''),   # Total
+  paste('No respiratory failure (n=', sum(!d), ', ', round(sum(!d)*100/N,0),'%)', sep=''),           # Alive stat
+  paste('Respiratory failure (n=', sum(d), ', ', round(sum(d)*100/N,0),'%)', sep=''),             # Dead stat
+  'P value'                                          # p-value
+  ))
+
+# Write data for each variable
+
+for (cvar in clinical){
+  
+  fit = glm(d ~ mibpp_c[,cvar[1]], family="binomial")
+  p = round(summary(fit)$coefficients[,'Pr(>|z|)'][2],3)
+  
+  if (cvar[3] == 'N'){
+    
+    t_avg = round(mean(mibpp_c[, cvar[1]], na.rm=TRUE), 1)
+    t_std = round(sd(mibpp_c[, cvar[1]], na.rm=TRUE), 1)
+    a_avg = round(mean(mibpp_c[!d, cvar[1]], na.rm=TRUE), 1)
+    a_std = round(sd(mibpp_c[!d, cvar[1]], na.rm=TRUE), 1)
+    d_avg = round(mean(mibpp_c[d, cvar[1]], na.rm=TRUE), 1)
+    d_std = round(sd(mibpp_c[d, cvar[1]], na.rm=TRUE), 1)
+    
+    table_out <- rbind(table_out, c(
+      cvar[2],                                               # Title
+      paste(t_avg,'±',t_std, sep=''),   # Total
+      paste(a_avg,'±',a_std, sep=''),           # Alive stat
+      paste(d_avg,'±',d_std, sep=''),             # Dead stat
+      p                                  # p-value
+      ))
+        
+  } else if (cvar[3] == 'B'){
+    
+    t = paste(round(mean(mibpp_c[, cvar[1]])*100, 0), '%', sep='')
+    ta = paste(round(mean(mibpp_c[!d, cvar[1]])*100, 0), '%', sep='')
+    td = paste(round(mean(mibpp_c[d, cvar[1]])*100, 0), '%', sep='')
+    
+    table_out <- rbind(table_out, c(
+      cvar[2],                                               # Title
+      t,   # Total
+      ta,           # Alive stat
+      td,             # Dead stat
+      p                                  # p-value
+      ))
+    
+  } 
+  
+}
+
+print(table_out)
+
+```
+
+
+
+
+Generate Table 1 - univariate relationship to death OR respiratory failure outcome
+
+```{r}
+
+table_out = data.frame()
+
+d = mibpp_c$Clinical_RespFailure | mibpp_c$Clinical_Dead
+N = length(d)
+
+# Write header row
+table_out <- rbind(table_out, c(
+  '',                                                 # Title
+  paste('Total (n=', N, ')', sep=''),   # Total
+  paste('Alive and no respiratory failure (n=', sum(!d), ', ', round(sum(!d)*100/N,0),'%)', sep=''),           # Alive stat
+  paste('Dead or respiratory failure (n=', sum(d), ', ', round(sum(d)*100/N,0),'%)', sep=''),             # Dead stat
+  'P value'                                          # p-value
+  ))
+
+# Write data for each variable
+
+for (cvar in clinical){
+  
+  fit = glm(d ~ mibpp_c[,cvar[1]], family="binomial")
+  p = round(summary(fit)$coefficients[,'Pr(>|z|)'][2],3)
+  
+  if (cvar[3] == 'N'){
+    
+    t_avg = round(mean(mibpp_c[, cvar[1]], na.rm=TRUE), 1)
+    t_std = round(sd(mibpp_c[, cvar[1]], na.rm=TRUE), 1)
+    a_avg = round(mean(mibpp_c[!d, cvar[1]], na.rm=TRUE), 1)
+    a_std = round(sd(mibpp_c[!d, cvar[1]], na.rm=TRUE), 1)
+    d_avg = round(mean(mibpp_c[d, cvar[1]], na.rm=TRUE), 1)
+    d_std = round(sd(mibpp_c[d, cvar[1]], na.rm=TRUE), 1)
+    
+    table_out <- rbind(table_out, c(
+      cvar[2],                                               # Title
+      paste(t_avg,'±',t_std, sep=''),   # Total
+      paste(a_avg,'±',a_std, sep=''),           # Alive stat
+      paste(d_avg,'±',d_std, sep=''),             # Dead stat
+      p                                  # p-value
+      ))
+        
+  } else if (cvar[3] == 'B'){
+    
+    t = paste(round(mean(mibpp_c[, cvar[1]])*100, 0), '%', sep='')
+    ta = paste(round(mean(mibpp_c[!d, cvar[1]])*100, 0), '%', sep='')
+    td = paste(round(mean(mibpp_c[d, cvar[1]])*100, 0), '%', sep='')
+    
+    table_out <- rbind(table_out, c(
+      cvar[2],                                               # Title
+      t,   # Total
+      ta,           # Alive stat
+      td,             # Dead stat
+      p                                  # p-value
+      ))
+    
+  } 
+  
+}
+
+print(table_out)
+
+```
+
+End
